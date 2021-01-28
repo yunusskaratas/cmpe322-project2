@@ -51,7 +51,7 @@ sem_t empty;
 sem_t full;
 sem_t reserve_lock;
 sem_t A_LOCK;
-
+FILE *outputfile;
 
 /* Function definitions that will be used by threads*/
 void *teller(void *param);
@@ -64,11 +64,12 @@ int main(int argc, char *argv[]){
     char theather_name[100];
     char NUMBER_CLIENTS[100];
 	FILE *myfile = fopen (argv[1], "r" );
-    
+    outputfile = fopen(argv[2],"w");
     fgets(theather_name, sizeof(theather_name), myfile); 
     theather_name[strcspn(theather_name, "\r\n")] = 0;
     
     printf("Welcome to the Sync-Ticket!\n");
+    fprintf(outputfile,"Welcome to the Sync-Ticket!\n");
     if(strcmp(theather_name,"OdaTiyatrosu") == 0){
         capacity = 60;
     }else if(strcmp(theather_name,"UskudarStudyoSahne") == 0){
@@ -124,7 +125,8 @@ int main(int argc, char *argv[]){
     for(int j = 0; j < 3; j++){
      
 		pthread_create(&teller_ids[j], NULL, &teller,NULL );
-        printf("%s is available\n", teller_ptr->teller_name);
+        printf("%s has arrived.\n", teller_ptr->teller_name);
+        fprintf(outputfile,"%s has arrived.\n", teller_ptr->teller_name);
         teller_ptr++;
        
 	}
@@ -153,7 +155,9 @@ int main(int argc, char *argv[]){
 	sem_destroy(&empty);
     sem_destroy(&A_LOCK);
     printf("All clients received service.\n");
-
+    fprintf(outputfile,"All clients received service.\n");
+    fclose(outputfile);
+    return 0;
 }
 
 void *client(void *param){
@@ -255,8 +259,17 @@ void *teller(void *param){
         pthread_cancel(served_client.thread_id);
         reserved_client_number = reserved_client_number +1;
         //printf("reserved client number : %d \n", reserved_client_number);
-       
-        
+         char* teller_name;
+        if(reserved_teller == 0){
+            teller_name = "Teller A";
+        }
+        else if(reserved_teller == 1){
+            teller_name = "Teller B";
+        }
+        else if(reserved_teller == 2){
+            teller_name = "Teller C";
+        }
+    
        
         if(successful>0){
            
@@ -267,25 +280,19 @@ void *teller(void *param){
              availability[reserved_teller] = 0;
              sem_post(&availability_lock);
             //Client2 requests seat 1, reserves seat 1. Signed by Teller B.
-            char* teller_name;
-            if(reserved_teller == 0){
-                teller_name = "Teller A";
-            }
-            else if(reserved_teller == 1){
-                teller_name = "Teller B";
-            }
-            else if(reserved_teller == 2){
-                teller_name = "Teller C";
-            }
-            printf("%s requests seat %d, reserves seat %d.Signed by %s \n",served_client.client_name,served_client.request_seat_id,successful,teller_name);
-            
+           
+            printf("%s requests seat %d, reserves seat %d. Signed by %s.\n",served_client.client_name,served_client.request_seat_id,successful,teller_name);
+            fprintf(outputfile, "%s requests seat %d, reserves seat %d. Signed by %s.\n",served_client.client_name,served_client.request_seat_id,successful,teller_name );
 
             //printf("reserved seat :  %d  for client : %s , signed by: %d \n", successful,served_client.client_name,reserved_teller+1);
             
 
         }
         else{
-            printf("no available seat for client : %s \n", served_client.client_name);
+            //Hermione123 requests seat 2, reserves None. Signed by Teller A.
+            printf("%s requests seat %d, reserves seat None. Signed by %s.\n",served_client.client_name,served_client.request_seat_id,teller_name);
+            fprintf(outputfile,"%s requests seat %d, reserves seat None. Signed by %s.\n",served_client.client_name,served_client.request_seat_id,teller_name);
+            
              sem_post(&reserve_lock);
               availability[reserved_teller] = 0;
              sem_post(&availability_lock);
