@@ -20,26 +20,29 @@ struct client_info {
 char client_name[20];  
 int arrival_time;
 int service_time;
-int request_seat_id;   
+int request_seat_id;  
+pthread_t thread_id; 
 };
 
 struct teller_info {
 
 char teller_name[15];  
-bool available; 
+
 };
 
 
 /* Size of the buffer for queue */
 #define BUFFER_SIZE 300 
-#define RESERVATION_SIZE 60
+#define RESERVATION_SIZE 250
 
 struct client_info buffer[BUFFER_SIZE];
 int reservation[RESERVATION_SIZE];
 int insertPointer = 0, removePointer = 0;
-
-
+int availability[3];
+int capacity=0;
 int requested_seat_id;
+int client_number=0;
+int reserved_client_number = 0 ;
 /*Define mutex and semaphores */
 
 sem_t rw_mutex;
@@ -47,6 +50,8 @@ sem_t availability_lock;
 sem_t empty;
 sem_t full;
 sem_t reserve_lock;
+sem_t A_LOCK;
+
 
 /* Function definitions that will be used by threads*/
 void *teller(void *param);
@@ -58,12 +63,12 @@ int main(int argc, char *argv[]){
     const char s[2] = ",";  
     char theather_name[100];
     char NUMBER_CLIENTS[100];
-	FILE *myfile = fopen ("configuration_file.txt", "r" );
+	FILE *myfile = fopen (argv[1], "r" );
     
     fgets(theather_name, sizeof(theather_name), myfile); 
     theather_name[strcspn(theather_name, "\r\n")] = 0;
-    int capacity = 0;
     
+    printf("Welcome to the Sync-Ticket!\n");
     if(strcmp(theather_name,"OdaTiyatrosu") == 0){
         capacity = 60;
     }else if(strcmp(theather_name,"UskudarStudyoSahne") == 0){
@@ -76,7 +81,7 @@ int main(int argc, char *argv[]){
 
 
     fgets(NUMBER_CLIENTS, sizeof(NUMBER_CLIENTS), myfile); 
-   
+   client_number = atoi(NUMBER_CLIENTS);
     struct client_info client_array[atoi(NUMBER_CLIENTS)];
     struct teller_info teller_array[3];
     
@@ -84,9 +89,7 @@ int main(int argc, char *argv[]){
     strcpy( teller_array[1].teller_name, "Teller B");
     strcpy( teller_array[2].teller_name, "Teller C");
    
-    for(int i =0 ; i<3;i++){
-        teller_array[i].available=true;
-    }
+    
     
 
     for(int i=0;i<atoi(NUMBER_CLIENTS);i++){
@@ -104,6 +107,8 @@ int main(int argc, char *argv[]){
     
     sem_init(&availability_lock, 0, 3);
     sem_init(&rw_mutex, 0, 1);
+    sem_init(&A_LOCK, 0, 1);
+    
     sem_init(&reserve_lock, 0, 1);
 	sem_init(&full, 0, 0);
 	sem_init(&empty, 0, BUFFER_SIZE);
@@ -117,15 +122,8 @@ int main(int argc, char *argv[]){
     teller_ptr  = teller_array;
      //create teller threads
     for(int j = 0; j < 3; j++){
-        
-        struct sched_param param;
-        pthread_attr_t attr;
-        pthread_attr_init (&attr);
-        pthread_attr_getschedparam (&attr, &param);
-        (param.sched_priority)--;
-        pthread_attr_setschedparam (&attr, &param);
-        pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT)
-		pthread_create(&teller_ids[j], &attr, &teller,(void*)teller_ptr );
+     
+		pthread_create(&teller_ids[j], NULL, &teller,NULL );
         printf("%s is available\n", teller_ptr->teller_name);
         teller_ptr++;
        
@@ -153,12 +151,16 @@ int main(int argc, char *argv[]){
     sem_destroy(&availability_lock);
     sem_destroy(&full);
 	sem_destroy(&empty);
-	return 0;
+    sem_destroy(&A_LOCK);
+    printf("All clients received service.\n");
+
 }
 
 void *client(void *param){
 	
     struct client_info *client_ptr_my =  (struct client_info*)param;
+    client_ptr_my->thread_id = pthread_self();
+    //printf("thread id is : %u\n",(unsigned int)client_ptr_my->thread_id);
     sleep(client_ptr_my->arrival_time);
     
     // client needs to produce and get to the queue
@@ -168,39 +170,71 @@ void *client(void *param){
     // Insert reservation seat request to the buffer
     buffer[insertPointer] = *client_ptr_my;
     insertPointer = (insertPointer + 1) % BUFFER_SIZE;
-    printf("%s request %d \n", client_ptr_my->client_name, client_ptr_my->request_seat_id);
+    //printf("%s request %d \n", client_ptr_my->client_name, client_ptr_my->request_seat_id);
     
     //remove lock to be used from any teller
     sem_post(&rw_mutex);
 	sem_post(&full);
     
 
-	pthread_exit(NULL);
+	
 }
 
 void *teller(void *param){
 	
-    struct teller_info *teller_ptr_my =  (struct teller_info*)param;
+    //struct teller_info *teller_ptr_my =  (struct teller_info*)param;
     
-
+    struct client_info served_client;
+    int reserved_teller = -1;
     while(1){
+        if(client_number == reserved_client_number ){
+            pthread_exit(NULL);
+           
+        }
+
         sem_wait(&availability_lock);
         //teller_ptr_my->available = false;
          
         sem_wait(&full);
         sem_wait(&rw_mutex);
-        // Get request
-        struct client_info served_client = buffer[removePointer];
-        removePointer = (removePointer + 1) % BUFFER_SIZE;
-        
+        //printf("availability : ");
+        //for(int i = 0; i<3; i++){
+        //    printf("%d ", availability[i]);
+        //}
+        //printf("\n");
+        sem_wait(&A_LOCK);
+        if(availability[0]==0){
+            
+            
+            served_client = buffer[removePointer];
+            removePointer = (removePointer + 1) % BUFFER_SIZE;
+            reserved_teller = 0;
+            availability[0]=1;
+            sem_post(&A_LOCK);
+        }
+        else if(availability[1]==0){
+   
+            served_client  = buffer[removePointer];
+            removePointer = (removePointer + 1) % BUFFER_SIZE;
+           reserved_teller = 1;
+           availability[1]=1;
+            sem_post(&A_LOCK);
+        }
+        else if(availability[2]==0){
+            
+            served_client = buffer[removePointer];
+            removePointer = (removePointer + 1) % BUFFER_SIZE;
+            reserved_teller = 2;
+            availability[2]=1;
+            sem_post(&A_LOCK);
+        }
         sem_post(&rw_mutex);
         sem_post(&empty);
 
-        //try to reserve the seat 
        
         
-        printf("%s handle the request of %s \n",teller_ptr_my->teller_name,served_client.client_name );
-        printf("reservation seat id: %d \n",served_client.request_seat_id);
+        //printf("%d handle the request of %s \n",reserved_teller+1,served_client.client_name );
+        //printf("reservation seat id: %d \n",served_client.request_seat_id);
 
         int successful = 0;
         sem_wait(&reserve_lock);
@@ -209,7 +243,7 @@ void *teller(void *param){
         }
         else{
             int i;
-            for(i = 1; i< RESERVATION_SIZE; i++){
+            for(i = 1; i< capacity; i++){
                 if(reservation[i]==0){
                     
                     successful = i;                   
@@ -217,24 +251,47 @@ void *teller(void *param){
                 }
             }
         }
+        //printf("thread name : %s with id : %u canceled\n", served_client.client_name,(unsigned int)served_client.thread_id);
+        pthread_cancel(served_client.thread_id);
+        reserved_client_number = reserved_client_number +1;
+        //printf("reserved client number : %d \n", reserved_client_number);
+       
+        
+       
         if(successful>0){
            
             
             reservation[successful] = 1; // make it reserved 
             sem_post(&reserve_lock);
             sleep(served_client.service_time);
-            printf("reserved seat :  %d  for client : %s , signed by: %s \n", successful,served_client.client_name,teller_ptr_my->teller_name);
+             availability[reserved_teller] = 0;
+             sem_post(&availability_lock);
+            //Client2 requests seat 1, reserves seat 1. Signed by Teller B.
+            char* teller_name;
+            if(reserved_teller == 0){
+                teller_name = "Teller A";
+            }
+            else if(reserved_teller == 1){
+                teller_name = "Teller B";
+            }
+            else if(reserved_teller == 2){
+                teller_name = "Teller C";
+            }
+            printf("%s requests seat %d, reserves seat %d.Signed by %s \n",served_client.client_name,served_client.request_seat_id,successful,teller_name);
+            
+
+            //printf("reserved seat :  %d  for client : %s , signed by: %d \n", successful,served_client.client_name,reserved_teller+1);
             
 
         }
         else{
             printf("no available seat for client : %s \n", served_client.client_name);
              sem_post(&reserve_lock);
+              availability[reserved_teller] = 0;
+             sem_post(&availability_lock);
         }
-       
+
         
-        //teller_ptr_my->available = true; 
-        sem_post(&availability_lock);
         
 
         
@@ -243,5 +300,5 @@ void *teller(void *param){
 
     }
     //sem_post(&availability_lock);
-	pthread_exit(NULL);
+	
 }
