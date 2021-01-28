@@ -11,7 +11,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <string.h>
-
+#include <sched.h>
 #define STRING_SIZE 10
 #define LINESIZE 100
 
@@ -35,7 +35,7 @@ bool available;
 #define RESERVATION_SIZE 60
 
 struct client_info buffer[BUFFER_SIZE];
-bool reservation[RESERVATION_SIZE] = {true};
+int reservation[RESERVATION_SIZE];
 int insertPointer = 0, removePointer = 0;
 
 
@@ -117,8 +117,15 @@ int main(int argc, char *argv[]){
     teller_ptr  = teller_array;
      //create teller threads
     for(int j = 0; j < 3; j++){
-      
-		pthread_create(&teller_ids[j], NULL, &teller,(void*)teller_ptr );
+        
+        struct sched_param param;
+        pthread_attr_t attr;
+        pthread_attr_init (&attr);
+        pthread_attr_getschedparam (&attr, &param);
+        (param.sched_priority)--;
+        pthread_attr_setschedparam (&attr, &param);
+        pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT)
+		pthread_create(&teller_ids[j], &attr, &teller,(void*)teller_ptr );
         printf("%s is available\n", teller_ptr->teller_name);
         teller_ptr++;
        
@@ -174,59 +181,67 @@ void *client(void *param){
 void *teller(void *param){
 	
     struct teller_info *teller_ptr_my =  (struct teller_info*)param;
-    sleep(25);
+    
 
+    while(1){
         sem_wait(&availability_lock);
-
-        
-        teller_ptr_my->available = false;
-        
+        //teller_ptr_my->available = false;
+         
         sem_wait(&full);
         sem_wait(&rw_mutex);
         // Get request
         struct client_info served_client = buffer[removePointer];
         removePointer = (removePointer + 1) % BUFFER_SIZE;
         
-        
+        sem_post(&rw_mutex);
+        sem_post(&empty);
+
         //try to reserve the seat 
+       
+        
+        printf("%s handle the request of %s \n",teller_ptr_my->teller_name,served_client.client_name );
+        printf("reservation seat id: %d \n",served_client.request_seat_id);
+
+        int successful = 0;
         sem_wait(&reserve_lock);
-        bool succesful_request = false;
-        if(reservation[served_client.request_seat_id]){
-            reservation[served_client.request_seat_id] = false; // make it reserved
-            succesful_request= true;
-            sleep(served_client.service_time);
-            printf("%s get request from %s \n", teller_ptr_my->teller_name,served_client.client_name);
-            printf("requested seat is available with id: %d\n", served_client.request_seat_id );
+        if(reservation[served_client.request_seat_id]==0){
+            successful = served_client.request_seat_id;
         }
         else{
-            for(int i = 1; i< RESERVATION_SIZE; i++){
-                if(reservation[i]){
-                    reservation[i] = false; // reserve from front
-                    succesful_request= true;
+            int i;
+            for(i = 1; i< RESERVATION_SIZE; i++){
+                if(reservation[i]==0){
+                    
+                    successful = i;                   
                     break;
                 }
             }
+        }
+        if(successful>0){
+           
+            
+            reservation[successful] = 1; // make it reserved 
+            sem_post(&reserve_lock);
             sleep(served_client.service_time);
-            printf("%s get request from %s \n", teller_ptr_my->teller_name,served_client.client_name);
-            printf("requested seat is not available, another seat is given\n");
+            printf("reserved seat :  %d  for client : %s , signed by: %s \n", successful,served_client.client_name,teller_ptr_my->teller_name);
+            
+
         }
-        if(!succesful_request){
-            printf("%s get request from %s \n", teller_ptr_my->teller_name,served_client.client_name);
-            printf("not a succesful request, no available seat exist\n");
+        else{
+            printf("no available seat for client : %s \n", served_client.client_name);
+             sem_post(&reserve_lock);
         }
+       
         
-        
-        sem_post(&reserve_lock);
-
-
-
-        pthread_mutex_unlock(&rw_mutex);
-        sem_post(&empty);
-
+        //teller_ptr_my->available = true; 
         sem_post(&availability_lock);
+        
+
+        
 
     
 
-    
+    }
+    //sem_post(&availability_lock);
 	pthread_exit(NULL);
 }
